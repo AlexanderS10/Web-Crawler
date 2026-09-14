@@ -97,18 +97,14 @@ class CrawlQueue:
         """
         domain_obj = self.domain_table[domain]
         domain_obj.pages += 1
-        domain_obj.status = "in_politeness"
+        self.superdomain_counts[domain_obj.superdomain] += 1
+        if len(domain_obj.queue) > 0:
+            ready_time = time.monotonic() + delay
+            heapq.heappush(self.politeness_heap, (ready_time, domain))
+            domain_obj.status = "in_politeness"
+        else:
+            domain_obj.status = "idle"
                     
-                    
-                
-        top_priority, domain_tuple, ready_time = self.politeness_heap[0]
-        current_time = time.time()
-        if domain_tuple and current_time >= ready_time:
-            domain_ready = heapq.heappop(self.politeness_heap)
-            heapq.heappush(self.priority_heap, domain_ready)
-            
-        ready_doma
-    
 
 def main():
     robots_cache = RobotsCache()
