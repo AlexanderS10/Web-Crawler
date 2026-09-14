@@ -24,10 +24,15 @@ class DomainInfo:
     
 class CrawlQueue:
     def __init__(self, seed_urls):
-        self.priority_heap:list = field(default_factory=list)
-        self.politeness_heap:list = field(default_factory=list)
+        self.priority_heap:list = []
+        self.politeness_heap:list = []
         self.domain_table = defaultdict(DomainInfo)
         self.superdomain_counts = defaultdict(int)
+        
+        if seed_urls:
+            for url in seed_urls:
+                clean_url = normalize_url(url)["url"]
+                self.add_url(clean_url, 0)
         
     def novelty_score(self, p:int, s:int):
         return (1/(math.log2(p+2))) + (1/(math.log2(s+2))) #the benefit of new domains is higher
@@ -50,7 +55,7 @@ class CrawlQueue:
                 score = self.novelty_score(domain_obj.pages, self.superdomain_counts[domain_obj.superdomain])
                 heapq.heappush(self.priority_heap,(-score, full_domain))
             domain_obj.queue.append((url, depth))
-            #the superdomain must be there
+            #The superdomain must be there
         else:
             novelty_score = self.novelty_score(0,0)
             self.domain_table[full_domain].add_item((url,depth),0, superdomain, "in_priority") #the pages is 0 as they are not crawled yet
@@ -71,25 +76,25 @@ class CrawlQueue:
             while self.politeness_heap and self.politeness_heap[0][0] <= now:
                 ready_time, domain = heapq.heappop(self.politeness_heap)
                 domain_obj = self.domain_table[domain]
-                score = self.novelty_score(domain_obj.pages, self.superdomain_counts[domain])
-                heapq.heappush(self.priority_heap, (-score, domain_obj.superdomain))
+                score = self.novelty_score(domain_obj.pages, self.superdomain_counts[domain_obj.superdomain])
+                heapq.heappush(self.priority_heap, (-score, domain))
                 domain_obj.status = "in_priority"
                 
-                #if the domain is ready in priority then can be popped
-                if self.priority_heap:
-                    neg_score, domain = heapq.heappop(self.priority_heap)
-                    domain_obj_priority = self.domain_table[domain]
-                    url, depth = domain_obj_priority.queue.popleft()
-                    domain_obj_priority.status = "active"
-                    return url, depth, domain
-                #edge case if no domain in the priority heap but some in the politeness
-                if self.politeness_heap:
-                    earliest_ready = self.politeness_heap[0][0]
-                    wait_time = earliest_ready - time.monotonic()
-                    if wait_time > 0:
-                        time.sleep(wait_time)
-                        continue
-                return None
+            #if the domain is ready in priority then can be popped
+            if self.priority_heap:
+                neg_score, domain = heapq.heappop(self.priority_heap)
+                domain_obj_priority = self.domain_table[domain]
+                url, depth = domain_obj_priority.queue.popleft()
+                domain_obj_priority.status = "active"
+                return url, depth, domain
+            #edge case if no domain in the priority heap but some in the politeness
+            if self.politeness_heap:
+                earliest_ready = self.politeness_heap[0][0]
+                wait_time = earliest_ready - time.monotonic()
+                if wait_time > 0:
+                    time.sleep(wait_time)
+                    continue
+            return None
     
     def finish_url(self,domain:str, delay:float =1.0):
         """
@@ -112,26 +117,37 @@ def main():
     limit = 10
     queue:Queue[tuple[str,int]]= Queue()
     counter =0
-    seed_test = normalize_url("https://falexsanchez.com")
-    queue.put((seed_test["url"], 0))
-    while counter < limit and not queue.empty():
-        url, depth = queue.get()
+    seed_urls = ["https://falexsanchez.com"]
+    crawl_queue = CrawlQueue(seed_urls)
+    while counter < limit:
+        item = crawl_queue.get_url()
+        if not item:
+            print("Empty queue of urls")
+            break
+        url, depth, domain = item
+        
         if url in seen_urls:
             continue
         seen_urls.add(url)
+        
         result = fetcher(url, robots_cache)
+        crawl_queue.finish_url(domain, 1.0)
         if not result:
             continue
-        counter+=1
-        status_code, content_size, full_url, links = result
-        print(f"{counter}. {full_url}, status:{status_code}, size: {content_size}, depth: {depth}")
-        if full_url not in seen_urls:
-            seen_urls.add(full_url) #THis is the final url in case of redirects so needs to be added to seen
-        if links: 
+        status, content_size, full_url, links =result
+        seen_urls.add(full_url) #This will add the final url if redirects occured
+        if status != 200:
+            print(f"Failed to fetch {full_url} with status code {status}")
+            continue
+        counter += 1
+        
+        print(f"{counter}. url: {full_url}, size: {content_size}, depth:{depth}")
+        #New urls are to be put in the url
+        if links:
+            child_depth = depth+1
             for link in links:
-                child_depth = depth + 1
-                queue.put((link, child_depth))
-            
+                if link not in seen_urls:
+                    crawl_queue.add_url(link, child_depth)
 
 if __name__ == "__main__":
     main()

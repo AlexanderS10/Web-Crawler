@@ -14,9 +14,9 @@ The idea of this crawler is a hybrid system where:
 
 ### Data Structures
 
-* Main data structure is a priority heap for the domains with the score rank.
+* Main data structure is a priority heap for the domains with the score rank. Here I will add the lock so it is self-contained.
 
-* Domain table holding a FIFI queue holding the urls pointing to the domain that still need to be downloaded (DomainInfo)
+* Domain table holding a FIFO queue holding the urls pointing to the domain that still need to be downloaded (DomainInfo)
 
 * Politeness heap where I will put domains crawled so they cooldown to not spam them.
 
