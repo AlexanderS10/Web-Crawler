@@ -59,7 +59,7 @@ class CrawlQueue:
         if not domain_info:
             return False
         full_domain, superdomain = domain_info
-        #Threading lock 
+        # Threading lock
         with self.lock:
             if clean_url in self.seen_urls:
                 return False
@@ -67,32 +67,34 @@ class CrawlQueue:
             if full_domain in self.domain_table:
                 domain_obj = self.domain_table[full_domain]
                 domain_obj.queue.append((clean_url, depth))
-                
-                #sleeping domain
+
+                # sleeping domain
                 if domain_obj.status == "idle":
                     domain_obj.status = "in_priority"
-                    score = self.novelty_score(domain_obj.pages, self.superdomain_counts[domain_obj.superdomain])
+                    score = self.novelty_score(
+                        domain_obj.pages, self.superdomain_counts[domain_obj.superdomain])
                     heapq.heappush(self.priority_heap, (-score, full_domain))
-            else: #New domain
+            else:  # New domain
                 if superdomain not in self.superdomain_counts:
-                    self.superdomain_counts[superdomain]=0
-                new_domain = DomainInfo(superdomain=superdomain, status="in_priority")
-                new_domain.queue.append((clean_url,depth))
+                    self.superdomain_counts[superdomain] = 0
+                new_domain = DomainInfo(
+                    superdomain=superdomain, status="in_priority")
+                new_domain.queue.append((clean_url, depth))
                 self.domain_table[full_domain] = new_domain
-                score = self.novelty_score(0, self.superdomain_counts[superdomain])
-                heapq.heappush(self.priority_heap,(-score, full_domain))
+                score = self.novelty_score(
+                    0, self.superdomain_counts[superdomain])
+                heapq.heappush(self.priority_heap, (-score, full_domain))
             return True
-                    
 
-    def get_url(self):
+    def get_url(self) -> tuple[str | None, int, str | None, float]:
         """
-        Returns url, depth, domain to crawl taking into consideration the politeness and novelty scores
+        Returns url, depth, domain, wait_time (taking into consideration the politeness and novelty scores)
 
         Returns None if there is no url to crawl
         """
-        # check if there is a url in the politeness heap and put it back in the priority heap
-        while True:
+        with self.lock:
             now = time.monotonic()
+            # check if there is a url in the politeness heap and put it back in the priority heap
             while self.politeness_heap and self.politeness_heap[0][0] <= now:
                 ready_time, domain = heapq.heappop(self.politeness_heap)
                 domain_obj = self.domain_table[domain]
@@ -100,36 +102,40 @@ class CrawlQueue:
                     domain_obj.pages, self.superdomain_counts[domain_obj.superdomain])
                 heapq.heappush(self.priority_heap, (-score, domain))
                 domain_obj.status = "in_priority"
-
             # if the domain is ready in priority then can be popped
             if self.priority_heap:
                 neg_score, domain = heapq.heappop(self.priority_heap)
                 domain_obj_priority = self.domain_table[domain]
                 url, depth = domain_obj_priority.queue.popleft()
                 domain_obj_priority.status = "active"
-                return url, depth, domain
+                self.active_workers += 1
+                return url, depth, domain, 0.0
             # edge case if no domain in the priority heap but some in the politeness
             if self.politeness_heap:
                 earliest_ready = self.politeness_heap[0][0]
-                wait_time = earliest_ready - time.monotonic()
-                if wait_time > 0:
-                    time.sleep(wait_time)
-                    continue
-            return None
+                wait_time = max(earliest_ready - now, 0.05)
+                return None, 0, None, wait_time
+            # edge case where heaps are empty but workers are going at it
+            if self.active_workers > 0:
+                return None, 0, None, 0.1
+
+            return None, 0, None, -0.1
 
     def finish_url(self, domain: str, delay: float = 1.0):
         """
          To be called after the url has been downloaded for a domain, this will update the counters and move the domain to politeness
         """
-        domain_obj = self.domain_table[domain]
-        domain_obj.pages += 1
-        self.superdomain_counts[domain_obj.superdomain] += 1
-        if len(domain_obj.queue) > 0:
-            ready_time = time.monotonic() + delay
-            heapq.heappush(self.politeness_heap, (ready_time, domain))
-            domain_obj.status = "in_politeness"
-        else:
-            domain_obj.status = "idle"
+        with self.lock:
+            self.active_workers-=1
+            domain_obj = self.domain_table[domain]
+            domain_obj.pages += 1
+            self.superdomain_counts[domain_obj.superdomain] += 1
+            if len(domain_obj.queue) > 0:
+                ready_time = time.monotonic() + delay
+                heapq.heappush(self.politeness_heap, (ready_time, domain))
+                domain_obj.status = "in_politeness"
+            else:
+                domain_obj.status = "idle"
 
 
 def main():
