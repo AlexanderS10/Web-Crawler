@@ -52,6 +52,12 @@ class CrawlQueue:
         return
 
     def add_url(self, url: str, depth: int):
+        """
+        Here I add a url to the FIFO queue
+        
+        returns None
+        """
+        
         if not url or not isinstance(url, str):
             return False
         clean_url = normalize_url(url)["url"]
@@ -126,7 +132,7 @@ class CrawlQueue:
          To be called after the url has been downloaded for a domain, this will update the counters and move the domain to politeness
         """
         with self.lock:
-            self.active_workers-=1
+            self.active_workers -= 1
             domain_obj = self.domain_table[domain]
             domain_obj.pages += 1
             self.superdomain_counts[domain_obj.superdomain] += 1
@@ -137,46 +143,82 @@ class CrawlQueue:
             else:
                 domain_obj.status = "idle"
 
+    def mark_seen(self, url: str):
+        "Moved this from main to keep the locks in the class"
+        clean_url = normalize_url(url)["url"]
+        with self.lock:
+            self.seen_urls.add(clean_url)
 
-def main():
-    robots_cache = RobotsCache()
-    seen_urls = set()
-    limit = 10
-    queue: Queue[tuple[str, int]] = Queue()
-    counter = 0
-    seed_urls = ["https://falexsanchez.com"]
-    crawl_queue = CrawlQueue(seed_urls)
-    while counter < limit:
-        item = crawl_queue.get_url()
-        if not item:
-            print("Empty queue of urls")
-            break
-        url, depth, domain = item
 
-        if url in seen_urls:
+def worker(worker_id: int, crawl_queue: CrawlQueue, robots_cache: RobotsCache, limit: int | None, shared_counter: list[int], counter_lock: threading.Lock, stop_event: threading.Event):
+    while not stop_event.is_set():
+        url, depth, domain, wait_time = crawl_queue.get_url()
+        if url is None or domain is None:
+            if wait_time < 0:
+                stop_event.set()
+                break
+            time.sleep(min(wait_time, 0.5))
             continue
-        seen_urls.add(url)
-
         result = fetcher(url, robots_cache)
         crawl_queue.finish_url(domain, 1.0)
         if not result:
             continue
         status, content_size, full_url, links = result
-        # This will add the final url if redirects occured
-        seen_urls.add(full_url)
+        crawl_queue.mark_seen(full_url)
         if status != 200:
-            print(f"Failed to fetch {full_url} with status code {status}")
             continue
-        counter += 1
-
-        print(f"{counter}. url: {full_url}, size: {content_size}, depth:{depth}")
-        # New urls are to be put in the url
+        with counter_lock:
+            #Because for testing I needed an optional limit here I pass it and check it first
+            if limit is not None and shared_counter[0] >= limit:
+                stop_event.set()
+                break
+            shared_counter[0]+=1
+            #Race conditions in case other threads made it here at the same time
+            if limit is not None and shared_counter[0] >= limit:
+                stop_event.set()
+                break
+                        
         if links:
             child_depth = depth+1
             for link in links:
-                if link not in seen_urls:
-                    crawl_queue.add_url(link, child_depth)
-
+                crawl_queue.add_url(link, child_depth)
+                
+            
+def main():
+    robots_cache = RobotsCache()
+    limit: int|None=100
+    threads_count:int =  10
+    seed_urls = ["https://falexsanchez.com"]
+    
+    crawl_queue = CrawlQueue(seed_urls)
+    shared_counter = [0]
+    counter_lock = threading.Lock()
+    stop_event = threading.Event()
+    
+    print(f"Starting teh crawl with {threads_count} threads, and with a limit of {limit} pages")
+    start_time = time.time()
+    threads = []
+    for i in range(threads_count):
+        t = threading.Thread(target=worker, args=(
+            i+1,
+            crawl_queue,
+            robots_cache,
+            limit,
+            shared_counter,
+            counter_lock,
+            stop_event
+        ))
+        t.start()
+        threads.append(t)
+    
+    total_time = time.time() - start_time
+    pages_crawled = shared_counter[0]
+    rate = pages_crawled / total_time if total_time > 0 else 0
+    print("CRAWL COMPLETE")
+    print(f"Time: {total_time} seconds")
+    print(f"Pages crawled: {pages_crawled}")
+    print(f"Rate: {rate} per second")
+        
 
 if __name__ == "__main__":
     main()
