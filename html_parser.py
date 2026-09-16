@@ -14,7 +14,7 @@ def parse_html(html_content, absolute_url):
     Here is where I will parse the html and only accept valid hrefs
     https://beautiful-soup-4.readthedocs.io/en/latest/
     """
-    soup = BeautifulSoup(html_content, 'html.parser')
+    soup = BeautifulSoup(html_content, 'lxml')
     links_set = set()
     base_tag = soup.find('base')
     base_url = ''

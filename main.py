@@ -1,6 +1,5 @@
 from html_parser import parse_html
 from fetcher import fetcher, RobotsCache
-from queue import Queue
 import heapq
 import math
 from url_utils import normalize_url, extract_domain_info
@@ -8,7 +7,7 @@ from collections import defaultdict, deque
 from dataclasses import dataclass, field
 import time
 import threading
-
+from search_util import get_search_seeds
 
 @dataclass
 class DomainInfo:
@@ -190,8 +189,16 @@ def main():
     robots_cache = RobotsCache()
     limit: int | None = 200
     threads_count: int = 30
-    seed_urls = ["https://falexsanchez.com", "https://www.nyu.edu/", "https://github.com/AlexanderS10", "https://www.google.com"]
-
+    
+    query = input("Search: ").strip()
+    seed_urls=[]
+    if query:
+        print("Fetching results")
+        seed_urls = get_search_seeds(query, max_results=15)
+        print(f"Returned {len(seed_urls)} results")
+    # seed_urls = ["https://falexsanchez.com", "https://www.nyu.edu/", "https://github.com/AlexanderS10", "https://www.google.com"]
+    for seed in seed_urls:
+        print(f"Seed url: {seed}")
     crawl_queue = CrawlQueue(seed_urls)
     shared_counter = [0]
     counter_lock = threading.Lock()
