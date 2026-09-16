@@ -188,9 +188,9 @@ def worker(worker_id: int, crawl_queue: CrawlQueue, robots_cache: RobotsCache, l
 
 def main():
     robots_cache = RobotsCache()
-    limit: int | None = 100
-    threads_count: int = 20
-    seed_urls = ["https://falexsanchez.com"]
+    limit: int | None = 200
+    threads_count: int = 30
+    seed_urls = ["https://falexsanchez.com", "https://www.nyu.edu/", "https://github.com/AlexanderS10", "https://www.google.com"]
 
     crawl_queue = CrawlQueue(seed_urls)
     shared_counter = [0]
@@ -227,9 +227,10 @@ def main():
     pages_crawled = shared_counter[0]
     rate = pages_crawled / total_time if total_time > 0 else 0
     print("CRAWL COMPLETE")
+    print(f"Threads used: {threads_count}")
     print(f"Time: {total_time} seconds")
     print(f"Pages crawled: {pages_crawled}")
-    print(f"Rate: {rate} per second")
+    print(f"Rate: {rate} pages per second")
 
 
 if __name__ == "__main__":

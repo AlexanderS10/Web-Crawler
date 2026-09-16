@@ -4,14 +4,20 @@ from urllib.robotparser import RobotFileParser
 from urllib.parse import urlsplit
 
 
+DEFAULT_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
+}
+DEFAULT_TIMEOUT = (1.5, 3.0)
+
+
 class RobotsCache:
     """
     The class for the cache object 
     """
 
-    def __init__(self, default_timeout=3):
+    def __init__(self, default_timeout=DEFAULT_TIMEOUT):
         self.cache: dict = {}
-        self.timeout: int = default_timeout
+        self.timeout = default_timeout
         self.user_agent: str = "*"
 
     def can_crawl(self, domain: str, url: str) -> bool:
@@ -23,7 +29,10 @@ class RobotsCache:
         robot_parser = RobotFileParser()
         try:
             robots_req = requests.get(
-                f"{urlsplit(url).scheme}://{domain}/robots.txt", timeout=3)
+                f"{urlsplit(url).scheme}://{domain}/robots.txt",
+                headers=DEFAULT_HEADERS,
+                timeout=self.timeout
+            )
             if robots_req.status_code == 200:
                 robot_parser.parse(robots_req.text.splitlines())
             else:
@@ -45,8 +54,7 @@ def fetcher(url: str, robots_cache: RobotsCache):
         domain = urlsplit(url).netloc
         if not robots_cache.can_crawl(domain, url):
             return
-        req = requests.get(url, timeout=(1.5, 3), headers={
-                           "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"})
+        req = requests.get(url, timeout=DEFAULT_TIMEOUT, headers=DEFAULT_HEADERS)
         if req.status_code == 200:
             context_type = req.headers.get("Content-Type", "")
             if "text/html" in context_type:

@@ -2,17 +2,15 @@ import tldextract
 from urllib.parse import urlsplit, urlunsplit
 
 
-def extract_domain_info(url: str) -> tuple[str, str]:
+def extract_domain_info(url: str) -> tuple[str, str] | None:
     """
     retuns: full_domain, superdomain
     """
 
     value = tldextract.extract(url)
-    if value.domain == "localhost":
-        return ("localhost", "localhost")
     if not value.suffix or not value.domain:
         # my test gave me empty values on localhost or ips
-        superdomain = value.domain or "localhost"
+        return None
     superdomain = f"{value.domain}.{value.suffix}"
     full_domain = value.fqdn or superdomain
     return (full_domain, superdomain)
