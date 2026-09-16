@@ -3,22 +3,23 @@ import requests
 from urllib.robotparser import RobotFileParser
 from urllib.parse import urlsplit
 
+
 class RobotsCache:
     """
     The class for the cache object 
     """
 
     def __init__(self, default_timeout=3):
-        self.cache:dict = {}
-        self.timeout:int = default_timeout
-        self.user_agent:str = "*"
+        self.cache: dict = {}
+        self.timeout: int = default_timeout
+        self.user_agent: str = "*"
 
-    def can_crawl(self, domain:str, url:str) -> bool:
+    def can_crawl(self, domain: str, url: str) -> bool:
         if domain not in self.cache:
             self._fetch_robots_file(domain, url)
         return self.cache[domain].can_fetch(self.user_agent, url)
 
-    def _fetch_robots_file(self, domain:str, url:str) -> None:
+    def _fetch_robots_file(self, domain: str, url: str) -> None:
         robot_parser = RobotFileParser()
         try:
             robots_req = requests.get(
@@ -33,32 +34,35 @@ class RobotsCache:
             robot_parser.parse([])
             self.cache[domain] = robot_parser
 
-def fetcher(url:str, robots_cache:RobotsCache):
+
+def fetcher(url: str, robots_cache: RobotsCache):
     """
     Fucntion to fetch the urls based on the robots txt files
-    
+
     returns: status_code, content lenght, url, links (set)
     """
     try:
         domain = urlsplit(url).netloc
-        if not robots_cache.can_crawl(domain,url):
+        if not robots_cache.can_crawl(domain, url):
             return
-        req = requests.get(url, timeout=3, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"})
+        req = requests.get(url, timeout=(1.5, 3), headers={
+                           "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"})
         if req.status_code == 200:
-            context_type = req.headers.get("Content-Type","")
+            context_type = req.headers.get("Content-Type", "")
             if "text/html" in context_type:
-                links = parse_html(req.text, req.url)    
+                links = parse_html(req.text, req.url)
                 return (req.status_code, len(req.content), req.url, links)
             return
         else:
             return (req.status_code, 0, req.url, None)
     except requests.exceptions.Timeout:
         print(f"Server took too long to respond")
-        return 
+        return
     except requests.exceptions.RequestException as e:
         print(f"The request gave a timeout {e}")
         return
-    
-if __name__== "__main__":
+
+
+if __name__ == "__main__":
     robots_cache = RobotsCache()
     fetcher("https://localhost:4321", robots_cache)

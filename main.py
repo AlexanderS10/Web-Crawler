@@ -127,15 +127,16 @@ class CrawlQueue:
 
             return None, 0, None, -0.1
 
-    def finish_url(self, domain: str, delay: float = 1.0):
+    def finish_url(self, domain: str, delay: float = 1.0, success: bool = True):
         """
          To be called after the url has been downloaded for a domain, this will update the counters and move the domain to politeness
         """
         with self.lock:
             self.active_workers -= 1
             domain_obj = self.domain_table[domain]
-            domain_obj.pages += 1
-            self.superdomain_counts[domain_obj.superdomain] += 1
+            if success:
+                domain_obj.pages += 1
+                self.superdomain_counts[domain_obj.superdomain] += 1
             if len(domain_obj.queue) > 0:
                 ready_time = time.monotonic() + delay
                 heapq.heappush(self.politeness_heap, (ready_time, domain))
@@ -160,7 +161,8 @@ def worker(worker_id: int, crawl_queue: CrawlQueue, robots_cache: RobotsCache, l
             time.sleep(min(wait_time, 0.5))
             continue
         result = fetcher(url, robots_cache)
-        crawl_queue.finish_url(domain, 1.0)
+        is_success = (result is not None and result[0] == 200)
+        crawl_queue.finish_url(domain, 0.5, success=is_success)
         if not result:
             continue
         status, content_size, full_url, links = result
@@ -187,7 +189,7 @@ def worker(worker_id: int, crawl_queue: CrawlQueue, robots_cache: RobotsCache, l
 def main():
     robots_cache = RobotsCache()
     limit: int | None = 100
-    threads_count: int = 10
+    threads_count: int = 20
     seed_urls = ["https://falexsanchez.com"]
 
     crawl_queue = CrawlQueue(seed_urls)
@@ -196,7 +198,7 @@ def main():
     stop_event = threading.Event()
 
     print(
-        f"Starting teh crawl with {threads_count} threads, and with a limit of {limit} pages")
+        f"Starting the crawl with {threads_count} threads, and with a limit of {limit} pages")
     start_time = time.time()
     threads = []
     for i in range(threads_count):
