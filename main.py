@@ -54,10 +54,10 @@ class CrawlQueue:
     def add_url(self, url: str, depth: int):
         """
         Here I add a url to the FIFO queue
-        
+
         returns None
         """
-        
+
         if not url or not isinstance(url, str):
             return False
         clean_url = normalize_url(url)["url"]
@@ -168,34 +168,35 @@ def worker(worker_id: int, crawl_queue: CrawlQueue, robots_cache: RobotsCache, l
         if status != 200:
             continue
         with counter_lock:
-            #Because for testing I needed an optional limit here I pass it and check it first
+            # Because for testing I needed an optional limit here I pass it and check it first
             if limit is not None and shared_counter[0] >= limit:
                 stop_event.set()
                 break
-            shared_counter[0]+=1
-            #Race conditions in case other threads made it here at the same time
+            shared_counter[0] += 1
+            # Race conditions in case other threads made it here at the same time
             if limit is not None and shared_counter[0] >= limit:
                 stop_event.set()
                 break
-                        
+
         if links:
             child_depth = depth+1
             for link in links:
                 crawl_queue.add_url(link, child_depth)
-                
-            
+
+
 def main():
     robots_cache = RobotsCache()
-    limit: int|None=100
-    threads_count:int =  10
+    limit: int | None = 100
+    threads_count: int = 10
     seed_urls = ["https://falexsanchez.com"]
-    
+
     crawl_queue = CrawlQueue(seed_urls)
     shared_counter = [0]
     counter_lock = threading.Lock()
     stop_event = threading.Event()
-    
-    print(f"Starting teh crawl with {threads_count} threads, and with a limit of {limit} pages")
+
+    print(
+        f"Starting teh crawl with {threads_count} threads, and with a limit of {limit} pages")
     start_time = time.time()
     threads = []
     for i in range(threads_count):
@@ -210,7 +211,16 @@ def main():
         ))
         t.start()
         threads.append(t)
-    
+    # Added a keyboard interrupt to end all threads otherwise they will hang
+    try:
+        for t in threads:
+            t.join()
+    except KeyboardInterrupt:
+        print("Force stop: ending threads")
+        stop_event.set()
+        for t in threads:
+            t.join()
+
     total_time = time.time() - start_time
     pages_crawled = shared_counter[0]
     rate = pages_crawled / total_time if total_time > 0 else 0
@@ -218,7 +228,7 @@ def main():
     print(f"Time: {total_time} seconds")
     print(f"Pages crawled: {pages_crawled}")
     print(f"Rate: {rate} per second")
-        
+
 
 if __name__ == "__main__":
     main()
