@@ -9,6 +9,7 @@ import time
 import threading
 from search_util import get_search_seeds
 
+
 @dataclass
 class DomainInfo:
     queue: deque = field(default_factory=deque)
@@ -188,15 +189,32 @@ def worker(worker_id: int, crawl_queue: CrawlQueue, robots_cache: RobotsCache, l
 def main():
     robots_cache = RobotsCache()
     limit: int | None = 200
-    threads_count: int = 30
-    
+    threads_count: int = 50
+
     query = input("Search: ").strip()
-    seed_urls=[]
+    seed_urls = []
     if query:
         print("Fetching results")
         seed_urls = get_search_seeds(query, max_results=15)
         print(f"Returned {len(seed_urls)} results")
-    # seed_urls = ["https://falexsanchez.com", "https://www.nyu.edu/", "https://github.com/AlexanderS10", "https://www.google.com"]
+    else:
+        seed_urls = [
+            "https://en.wikipedia.org/wiki/IPhone_Duo",
+            "https://www.apple.com/iphone-duo/",
+            "https://www.apple.com/newsroom/2026/09/apple-unveils-iphone-duo/",
+            "https://www.t-mobile.com/cell-phone/apple-iphone-duo",
+            "https://www.apple.com/iphone-duo/specs/",
+            "https://www.verizon.com/smartphones/apple-iphone-duo/",
+            "https://mashable.com/tech/iphone-duo-foldable-announcement-apple-event-2026",
+            "https://www.att.com/buy/phones/apple-iphone-duo.html",
+            "https://www.cnn.com/2026/09/09/tech/apple-announces-iphone-duo-first-foldable-iphone",
+            "https://www.techradar.com/phones/iphone/iphone-duo-hands-on",
+            "https://www.gsmarena.com/apple_iphone_duo_fold-13804.php",
+            "https://www.macrumors.com/2026/09/09/apple-announces-foldable-iphone-duo/",
+            "https://www.tomsguide.com/phones/iphones/iphone-duo-hands-on-apple-nailed-it-and-just-put-everyone-else-on-notice",
+            "https://www.macrumors.com/2026/09/09/iphone-duo-start-at-2000/",
+            "https://www.cnet.com/tech/mobile/yes-the-iphone-duo-is-a-first-generation-phone-thats-why-you-should-get-one-if-you-can/"
+        ]
     for seed in seed_urls:
         print(f"Seed url: {seed}")
     crawl_queue = CrawlQueue(seed_urls)

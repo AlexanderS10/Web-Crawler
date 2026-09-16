@@ -7,7 +7,7 @@ from urllib.parse import urlsplit
 DEFAULT_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
 }
-DEFAULT_TIMEOUT = (1.5, 3.0)
+DEFAULT_TIMEOUT = (0.8, 2.5)
 
 
 class RobotsCache:
