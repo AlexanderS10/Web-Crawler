@@ -2,7 +2,7 @@
 
 ## Packages installed that are third-party
 
-1. beautifulsoup4: This is for extracting the hyperlinks rather than a custom parser
+1. lxml: Changed from beautifulsoup4 due to performance issues.
 
 2. tldextractz: Extract the superdomains from subdomains for the accurate count
 
@@ -40,9 +40,7 @@ The idea of this crawler is a hybrid system where:
 
 3. Request and Robots: This is outside the locks and this checks the cache for the existence of the robots.txt file or fetches it. Requests the page with a strict timeout. Verify it is the correct type: Html or txt.
 
-4. Parse the html using the beautifulsoup4 package to extract urls.
-
-    * TODO: Handle the fact that some are relative urls so they need to be joined.
+4. Parse the html using the lxml.html package to extract urls.
 
 5. Update State (under a lock).
 
