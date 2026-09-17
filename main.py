@@ -1,4 +1,3 @@
-from html_parser import parse_html
 from fetcher import fetcher, RobotsCache
 import heapq
 import math
@@ -8,6 +7,7 @@ from dataclasses import dataclass, field
 import time
 import threading
 from search_util import get_search_seeds
+from logger import CrawlLogger
 
 
 @dataclass
@@ -92,9 +92,9 @@ class CrawlQueue:
                 heapq.heappush(self.priority_heap, (-score, full_domain))
             return True
 
-    def get_url(self) -> tuple[str | None, int, str | None, float]:
+    def get_url(self) -> tuple[str | None, int, str | None, float, float, float]:
         """
-        Returns url, depth, domain, wait_time (taking into consideration the politeness and novelty scores)
+        Returns url, depth, domain, page_score, domain_score, wait_time (taking into consideration the politeness and novelty scores)
 
         Returns None if there is no url to crawl
         """
@@ -115,17 +115,21 @@ class CrawlQueue:
                 url, depth = domain_obj_priority.queue.popleft()
                 domain_obj_priority.status = "active"
                 self.active_workers += 1
-                return url, depth, domain, 0.0
+                p = domain_obj_priority.pages
+                s = self.superdomain_counts[domain_obj_priority.superdomain]
+                page_score = 1.0 / math.log2(p + 2)
+                domain_score = 1.0 / math.log2(s + 2)
+                return url, depth, domain, page_score, domain_score, 0.0
             # edge case if no domain in the priority heap but some in the politeness
             if self.politeness_heap:
                 earliest_ready = self.politeness_heap[0][0]
                 wait_time = max(earliest_ready - now, 0.05)
-                return None, 0, None, wait_time
+                return None, 0, None, 0.0, 0.0, wait_time
             # edge case where heaps are empty but workers are going at it
             if self.active_workers > 0:
-                return None, 0, None, 0.1
+                return None, 0, None, 0.0, 0.0, 0.1
 
-            return None, 0, None, -0.1
+            return None, 0, None, 0.0, 0.0, -0.1
 
     def finish_url(self, domain: str, delay: float = 1.0, success: bool = True):
         """
@@ -151,9 +155,9 @@ class CrawlQueue:
             self.seen_urls.add(clean_url)
 
 
-def worker(worker_id: int, crawl_queue: CrawlQueue, robots_cache: RobotsCache, limit: int | None, shared_counter: list[int], counter_lock: threading.Lock, stop_event: threading.Event):
+def worker(worker_id: int, crawl_queue: CrawlQueue, robots_cache: RobotsCache, limit: int | None, shared_counter: list[int], counter_lock: threading.Lock, stop_event: threading.Event, crawl_logger: CrawlLogger):
     while not stop_event.is_set():
-        url, depth, domain, wait_time = crawl_queue.get_url()
+        url, depth, domain, page_score, domain_score, wait_time = crawl_queue.get_url()
         if url is None or domain is None:
             if wait_time < 0:
                 stop_event.set()
@@ -163,10 +167,14 @@ def worker(worker_id: int, crawl_queue: CrawlQueue, robots_cache: RobotsCache, l
         result = fetcher(url, robots_cache)
         is_success = (result is not None and result[0] == 200)
         crawl_queue.finish_url(domain, 0.5, success=is_success)
+        access_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
         if not result:
+            crawl_logger.log(url, 0, access_time, 0, page_score, domain_score, depth)
             continue
         status, content_size, full_url, links = result
         crawl_queue.mark_seen(full_url)
+        
+        crawl_logger.log(url, content_size, access_time, status, page_score, domain_score, depth)
         if status != 200:
             continue
         with counter_lock:
@@ -226,6 +234,7 @@ def main():
         f"Starting the crawl with {threads_count} threads, and with a limit of {limit} pages")
     start_time = time.time()
     threads = []
+    logger = CrawlLogger("crawl_log.csv")
     for i in range(threads_count):
         t = threading.Thread(target=worker, args=(
             i+1,
@@ -234,7 +243,8 @@ def main():
             limit,
             shared_counter,
             counter_lock,
-            stop_event
+            stop_event,
+            logger
         ))
         t.start()
         threads.append(t)
