@@ -10,7 +10,7 @@ class CrawlLogger:
     """
     HEADERS = [
         "url",
-        "size"
+        "size",
         "access_time",
         "return_code",
         "page_score",

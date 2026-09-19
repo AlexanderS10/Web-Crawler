@@ -25,6 +25,9 @@ class DomainInfo:
 
 
 class CrawlQueue:
+    W_Page: float = 1.0  # Wight for the pages within the same subdomain
+    W_Super: float = 3.0  # Weight for the super domain (extra boost)
+
     def __init__(self, seed_urls):
         self.lock = threading.Lock()
         self.priority_heap: list = []
@@ -41,7 +44,9 @@ class CrawlQueue:
 
     def novelty_score(self, p: int, s: int):
         # the benefit of new domains is higher
-        return (1/(math.log2(p+2))) + (1/(math.log2(s+2)))
+        page_term = 1/(math.log2(p+2))
+        super_term = 1/(math.log2(s+2))
+        return (self.W_Page * page_term) + (self.W_Super*super_term)
 
     def add_to_priority(self, domain: str):
         domain_obj = self.domain_table[domain]
@@ -84,7 +89,7 @@ class CrawlQueue:
                 if superdomain not in self.superdomain_counts:
                     self.superdomain_counts[superdomain] = 0
                 new_domain = DomainInfo(
-                    superdomain=superdomain, status="in_priority")
+                    pages=0, superdomain=superdomain, status="in_priority")
                 new_domain.queue.append((clean_url, depth))
                 self.domain_table[full_domain] = new_domain
                 score = self.novelty_score(
@@ -117,8 +122,8 @@ class CrawlQueue:
                 self.active_workers += 1
                 p = domain_obj_priority.pages
                 s = self.superdomain_counts[domain_obj_priority.superdomain]
-                page_score = 1.0 / math.log2(p + 2)
-                domain_score = 1.0 / math.log2(s + 2)
+                page_score = self.W_Page / math.log2(p + 2)
+                domain_score = self.W_Super / math.log2(s + 2)
                 return url, depth, domain, page_score, domain_score, 0.0
             # edge case if no domain in the priority heap but some in the politeness
             if self.politeness_heap:
@@ -169,12 +174,14 @@ def worker(worker_id: int, crawl_queue: CrawlQueue, robots_cache: RobotsCache, l
         crawl_queue.finish_url(domain, 0.5, success=is_success)
         access_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
         if not result:
-            crawl_logger.log(url, 0, access_time, 0, page_score, domain_score, depth)
+            crawl_logger.log(url, 0, access_time, 0,
+                             page_score, domain_score, depth)
             continue
         status, content_size, full_url, links = result
         crawl_queue.mark_seen(full_url)
-        
-        crawl_logger.log(url, content_size, access_time, status, page_score, domain_score, depth)
+
+        crawl_logger.log(url, content_size, access_time,
+                         status, page_score, domain_score, depth)
         if status != 200:
             continue
         with counter_lock:
