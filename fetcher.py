@@ -44,23 +44,21 @@ class RobotsCache:
             self.cache[domain] = robot_parser
 
 
-def fetcher(url: str, robots_cache: RobotsCache):
+def fetcher(url: str):
     """
     Fucntion to fetch the urls based on the robots txt files
 
     returns: status_code, content lenght, url, links (set)
     """
     try:
-        domain = urlsplit(url).netloc
-        if not robots_cache.can_crawl(domain, url):
-            return
-        req = requests.get(url, timeout=DEFAULT_TIMEOUT, headers=DEFAULT_HEADERS)
+        req = requests.get(url, timeout=DEFAULT_TIMEOUT,
+                           headers=DEFAULT_HEADERS)
         if req.status_code == 200:
             context_type = req.headers.get("Content-Type", "")
             if "text/html" in context_type:
                 links = parse_html(req.text, req.url)
                 return (req.status_code, len(req.content), req.url, links)
-            return
+            return (req.status_code, 0, req.url, None)  # 403 or 500 etc
         else:
             return (req.status_code, 0, req.url, None)
     except requests.exceptions.Timeout:
@@ -73,4 +71,4 @@ def fetcher(url: str, robots_cache: RobotsCache):
 
 if __name__ == "__main__":
     robots_cache = RobotsCache()
-    fetcher("https://localhost:4321", robots_cache)
+    fetcher("https://localhost:4321")

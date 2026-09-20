@@ -18,7 +18,7 @@ class DomainInfo:
     status: str = "idle"
 
     def add_item(self, value: tuple[str, int], pages, superdomain, status):
-        self.queue.append(value)
+        self.queue.append(value)  # the queue has the url and the depth
         self.pages = pages
         self.superdomain = superdomain
         self.status = status
@@ -136,6 +136,16 @@ class CrawlQueue:
 
             return None, 0, None, 0.0, 0.0, -0.1
 
+    def get_next_url_for_domain(self, domain: str):
+        """
+        This one is to pop the next url since robots blocking a url request should pop the next url in that domain
+        """
+        with self.lock:
+            domain_obj = self.domain_table[domain]
+            if domain_obj.queue:
+                return domain_obj.queue.popleft()
+            return None
+
     def finish_url(self, domain: str, delay: float = 1.0, success: bool = True):
         """
          To be called after the url has been downloaded for a domain, this will update the counters and move the domain to politeness
@@ -169,7 +179,17 @@ def worker(worker_id: int, crawl_queue: CrawlQueue, robots_cache: RobotsCache, l
                 break
             time.sleep(min(wait_time, 0.5))
             continue
-        result = fetcher(url, robots_cache)
+
+        while not robots_cache.can_crawl(domain, url):
+            next_item = crawl_queue.get_next_url_for_domain(domain)
+            if next_item is None:
+                url = None
+                break
+            url, depth = next_item
+        if url is None:  # if for soem reason all the urls in the queue were in robots
+            crawl_queue.finish_url(domain, delay=0.0, success=False)
+            continue
+        result = fetcher(url)
         is_success = (result is not None and result[0] == 200)
         crawl_queue.finish_url(domain, 0.5, success=is_success)
         access_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
@@ -185,12 +205,7 @@ def worker(worker_id: int, crawl_queue: CrawlQueue, robots_cache: RobotsCache, l
         if status != 200:
             continue
         with counter_lock:
-            # Because for testing I needed an optional limit here I pass it and check it first
-            if limit is not None and shared_counter[0] >= limit:
-                stop_event.set()
-                break
             shared_counter[0] += 1
-            # Race conditions in case other threads made it here at the same time
             if limit is not None and shared_counter[0] >= limit:
                 stop_event.set()
                 break
@@ -204,7 +219,7 @@ def worker(worker_id: int, crawl_queue: CrawlQueue, robots_cache: RobotsCache, l
 def main():
     robots_cache = RobotsCache()
     limit: int | None = 200
-    threads_count: int = 50
+    threads_count: int = 20
 
     query = input("Search: ").strip()
     seed_urls = []
