@@ -1,10 +1,23 @@
+"""
+URL Utilities Files
+
+Provides helper functions for extracting the domains, super domains and normalizing urls (defragmentization)
+"""
+
 import tldextract
 from urllib.parse import urlsplit, urlunsplit
 
 
 def extract_domain_info(url: str) -> tuple[str, str] | None:
     """
-    retuns: full_domain, superdomain
+    Extracts the full domains and the superdomains which uses tldextract to find them out.
+
+    Args:
+        url: str
+
+    Retuns: 
+        (full_domain, superdomain):tuple|None
+        None if the urls does not have a valid domain/suffix
     """
 
     value = tldextract.extract(url)
@@ -20,7 +33,11 @@ def normalize_url(url: str) -> dict[str, str]:
     """
     Normalize the urls to lower cases and remove fragments like class ids
 
-    return a dict: url:str, path: str, scheme:str
+    Args:
+        url:str
+
+    Returns:
+        {url:str, path:str, scheme:str}:dict
     """
 
     parts = urlsplit(url)

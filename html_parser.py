@@ -1,3 +1,8 @@
+"""
+Parses the HTML to extract the links
+"""
+
+
 import lxml.html
 from urllib.parse import urljoin
 from url_utils import normalize_url
@@ -11,10 +16,17 @@ BLACKLIST_EXTENSIONS = {
 
 def parse_html(html_content: str, absolute_url: str) -> set[str]:
     """
-    Here is where I will parse the html and only accept valid hrefs
+    Here is where I will parse the html and only accept valid hrefs. Inspects the content for <base> tags to resolve relative urls to absolute.
+    This also parses out urls with invalid extensions
 
-    Changed from beautiful soup 4 to lxml.html since the parser was taking over 50% of the compute time or like 5s per page
+    Args:
+        html_content:str
+        absolute_url:str
+
+    Returns:
+        [] An array of unique normalized urls
     """
+
     if not html_content or not html_content.strip():
         return set()
 
