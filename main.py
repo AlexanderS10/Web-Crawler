@@ -259,6 +259,15 @@ def worker(worker_id: int, crawl_queue: CrawlQueue, robots_cache: RobotsCache, l
     Pops urls from the crawl_queue, filters robots.txt permissions in memory,
     retrieves web pages over http outside of locks, logs outcomes, updates limits,
     and enqueues newly discovered links
+    Args:
+        worker_id:int = Unique thread identifier
+        crawl_queue:CrawlQueue = Shared queue object managing priority and politeness heaps
+        robots_cache:RobotsCache = In-memory cache for robots.txt rules
+        limit:int | None = Maximum number of successful (status 200) pages to crawl
+        shared_counter:list[int] = Shared counter tracking successful pages crawled
+        counter_lock:threading.Lock = Mutex lock protecting updates to shared_counter
+        stop_event:threading.Event = Event flag to signal all worker threads to stop
+        crawl_logger:CrawlLogger = Thread safe logger instance
     """
     while not stop_event.is_set():
         url, depth, domain, page_score, domain_score, wait_time = crawl_queue.get_url()
@@ -312,8 +321,8 @@ def main():
     Prompts for the search query or load default links if empty and spaws the workers to crawl until the limit set is reached.
     """
     robots_cache = RobotsCache()
-    limit: int | None = 200
-    threads_count: int = 20
+    limit: int | None = 5500
+    threads_count: int = 30
 
     query = input("Search: ").strip()
     seed_urls = []
@@ -379,9 +388,14 @@ def main():
     rate = pages_crawled / total_time if total_time > 0 else 0
     print("CRAWL COMPLETE")
     print(f"Threads used: {threads_count}")
-    print(f"Time: {total_time} seconds")
+    print(f"Time: {total_time:.2f} seconds")
     print(f"Pages crawled: {pages_crawled}")
-    print(f"Rate: {rate} pages per second")
+    print(f"404 Errors: {logger.status_counts.get(404, 0)}")
+    print(f"Total data: {logger.total_bytes / (1024 * 1024):.2f} MB")
+    print(f"Rate: {rate:.2f} pages per second")
+
+    logger.write_summary(total_time)
+    logger.close()
 
 
 if __name__ == "__main__":

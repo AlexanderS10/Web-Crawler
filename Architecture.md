@@ -6,7 +6,7 @@
 
 2. tldextractz: Extract the superdomains from subdomains for the accurate count
 
-3. duckduckgo_search: This will be the search engine used for the seed since it is free.
+3. ddgs: This will be the search engine used for the seed since it is free.
 
 ## The crawler architecture
 
@@ -20,7 +20,7 @@ The idea of this crawler is a hybrid system where:
 
 * Politeness heap where I will put domains crawled so they cooldown to not spam them.
 
-* Seen set so a page is not re-crawled
+* Seen set so a page is not re-crawled by not even being put in the queue.
 
 * Super domain table where a count of the super domains is kept that will be used for the score
 
@@ -28,7 +28,7 @@ The idea of this crawler is a hybrid system where:
 
 ### Concurrency
 
-* Single threading.Lock protecting the heaps and dictionaries. The domain table will have a status field so a domain cannot be put in the heap multiple times.
+* Single threading.Lock protecting the heaps and dictionaries as well as the counter for how many pages I crawl. The domain table will have a status field so a domain cannot be put in the heap multiple times.
 
 * A worker only acquires the lock to pop or push into the data structures and not while waiting the request's response.
 
@@ -36,9 +36,9 @@ The idea of this crawler is a hybrid system where:
 
 1. Check if the politeness heap has a current_time >= ready_time and if this is true then move it to the Priority heap.
 
-2. Pop the top of the Priority Queue and mark it as Active. Pop the next item in the FIFO queue.
+2. Pop the top of the Priority Queue and mark it as Active. Pop the next item in the FIFO queue. It is safe to assume that the item in the FIFO queue can be popped in regular order as that in the majority of cases would be the order they arrive in anyways.
 
-3. Request and Robots: This is outside the locks and this checks the cache for the existence of the robots.txt file or fetches it. Requests the page with a strict timeout. Verify it is the correct type: Html or txt.
+3. In the worker we check if the page is in robots.txt and if it is the next url is then obtained this way a worker is ensured to make an http request -> Woker then requests the page with a strict timeout. Verify it is the correct type: Html or txt. Return the data like the size and the code.
 
 4. Parse the html using the lxml.html package to extract urls.
 
@@ -48,7 +48,7 @@ The idea of this crawler is a hybrid system where:
 
     * Increment the superdomain count
 
-    * Compute the new novelty score: Novelty(Domain) - Penalty(Superdomain)
+    * Compute the new novelty score: Novelty(Domain)
 
     * If the domain has urls then it gets placed into the politeness heap or if epty mark it as dormant
 
