@@ -1,3 +1,7 @@
+"""
+Main file with the worker and thread safe class to handle the queue
+"""
+
 from fetcher import fetcher, RobotsCache
 import heapq
 import math
@@ -12,6 +16,16 @@ from logger import CrawlLogger
 
 @dataclass
 class DomainInfo:
+    """
+    State and url queue for a single domain
+
+    Fields:
+        queue: [] = Contains the urls for the domain as they are found during crawling
+        pages: int = The number of pages that are successfully crawled
+        superdomain:str = The name of the superdomain
+        status: str = The state of the domain (Idle, In the politeness heap or priority heap and active)
+    """
+
     queue: deque = field(default_factory=deque)
     pages: int = 0
     superdomain: str = ""
@@ -25,10 +39,24 @@ class DomainInfo:
 
 
 class CrawlQueue:
+    """
+    Central synchronized crawl
+
+    Coordinates two heaps:
+      1. priority_heap: Max-heap (using negative keys) ranking domains by novelty.
+      2. politeness_heap: Min-heap enforcing per-domain time cooldowns.
+    """
     W_Page: float = 1.0  # Wight for the pages within the same subdomain
     W_Super: float = 3.0  # Weight for the super domain (extra boost)
 
     def __init__(self, seed_urls):
+        """
+        Initializes the heaps, tracking tables and locks 
+
+        Args:
+            seed_urls:[] = The initial list of urls to start the crawling
+        """
+
         self.lock = threading.Lock()
         self.priority_heap: list = []
         self.politeness_heap: list = []
@@ -42,7 +70,20 @@ class CrawlQueue:
                 clean_url = normalize_url(url)["url"]
                 self.add_url(clean_url, 0)
 
-    def novelty_score(self, p: int, s: int):
+    def novelty_score(self, p: int, s: int) -> float:
+        """
+        Calculates priority score balancing page and superdomain novelty
+
+        Uses logarithmic damping: (W_Page / lg(p + 2)) + (W_Super / lg(s + 2))
+        Higher W_Super prevents subdomain traps like the wikipedia example
+
+        Args:
+            p:int = Count of pages already crawled from this subdomain
+            s:int = Total count of pages crawled across the superdomain
+
+        Returns:
+            novelty_score:float = Novelty score (higher indicates higher crawl priority).
+        """
         # the benefit of new domains is higher
         page_term = 1/(math.log2(p+2))
         super_term = 1/(math.log2(s+2))
@@ -58,9 +99,17 @@ class CrawlQueue:
 
     def add_url(self, url: str, depth: int):
         """
-        Here I add a url to the FIFO queue
+        Enqueues a dicovered url into its domain's FIFO queue
 
-        returns None
+        Deduplicates against seen_urls under lock. Awakens dormant ('idle')
+        domains into priority_heap.
+
+        Args:
+            url:str = The normalized link target
+            depth:int = Depth from seed url
+
+        Returns:
+            True if the URL was accepted; False if already seen or invalid.
         """
 
         if not url or not isinstance(url, str):
@@ -99,10 +148,22 @@ class CrawlQueue:
 
     def get_url(self) -> tuple[str | None, int, str | None, float, float, float]:
         """
-        Returns url, depth, domain, page_score, domain_score, wait_time (taking into consideration the politeness and novelty scores)
+        Selects the next eligible url to crawl from the hihest domain's FIFO queue and marks the domain as active
+
+        Checks the politeness heap for domains ready to be put back in the priority heap.
+        Returns:
+            tuple(
+                url:str,
+                depth:int,
+                domain:str,
+                page_score:float, 
+                domain_score:float, 
+                wait_time (taking into consideration the politeness and novelty scores)
+            )
 
         Returns None if there is no url to crawl
         """
+        
         with self.lock:
             now = time.monotonic()
             # check if there is a url in the politeness heap and put it back in the priority heap
@@ -138,7 +199,15 @@ class CrawlQueue:
 
     def get_next_url_for_domain(self, domain: str):
         """
-        This one is to pop the next url since robots blocking a url request should pop the next url in that domain
+        Pops the next URL from an already active domain's queue under lock.
+
+        This is where if a url is blocked by robots.txt this can be called to get the next url
+
+        Args:
+            domain:str = The hostname of the currently active domain in the worker
+
+        Returns:
+            tuple(url, depth), or None if the domain's queue is empty.
         """
         with self.lock:
             domain_obj = self.domain_table[domain]
@@ -148,7 +217,14 @@ class CrawlQueue:
 
     def finish_url(self, domain: str, delay: float = 1.0, success: bool = True):
         """
-         To be called after the url has been downloaded for a domain, this will update the counters and move the domain to politeness
+        To be called after the url has been downloaded for a domain, this will update the counters and move the domain to politeness
+        
+        This also decrements the active_workers' count
+        
+        Args:
+            domain:str = Hostname whose url finished crawling
+            delay: int = The duration of the cooldown or how long will it be put in the politeness heap
+            success:bool = If the http request was successful or not
         """
         with self.lock:
             self.active_workers -= 1
@@ -164,13 +240,26 @@ class CrawlQueue:
                 domain_obj.status = "idle"
 
     def mark_seen(self, url: str):
-        "Moved this from main to keep the locks in the class"
+        """
+        Mark a url as seen so it is not put back again in the queues if found during crawl
+        
+        Args:
+            url:str = Final parsed url
+        """
+        
         clean_url = normalize_url(url)["url"]
         with self.lock:
             self.seen_urls.add(clean_url)
 
 
 def worker(worker_id: int, crawl_queue: CrawlQueue, robots_cache: RobotsCache, limit: int | None, shared_counter: list[int], counter_lock: threading.Lock, stop_event: threading.Event, crawl_logger: CrawlLogger):
+    """
+    Worker thread execution loop.
+
+    Pops urls from the crawl_queue, filters robots.txt permissions in memory,
+    retrieves web pages over http outside of locks, logs outcomes, updates limits,
+    and enqueues newly discovered links
+    """
     while not stop_event.is_set():
         url, depth, domain, page_score, domain_score, wait_time = crawl_queue.get_url()
         if url is None or domain is None:
@@ -217,6 +306,11 @@ def worker(worker_id: int, crawl_queue: CrawlQueue, robots_cache: RobotsCache, l
 
 
 def main():
+    """
+    Application entry point
+
+    Prompts for the search query or load default links if empty and spaws the workers to crawl until the limit set is reached.
+    """
     robots_cache = RobotsCache()
     limit: int | None = 200
     threads_count: int = 20
