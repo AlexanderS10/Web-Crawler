@@ -1,0 +1,66 @@
+High-Level Architecture (original is Architecture.md)
+
+    Dual heap design: 
+        - There are two heaps; one the "priority" heap (max heap) with the domains and the key being the novelty score as the sorting key.
+        The "politeness" heap (min heap) holds the domains as well but the sorting is the wait time so that when ready time is less than the 
+        current time it should be returned to the priority heap.
+        -Why to heaps and a Queue? The reason is not hammering a single domain so a single worker per domain is needed.
+    
+    Per-Domain FIFO Queue:
+        - The DomainInfo; a dictionary for O(1) lookup hold the information necessary of a domain and it has a FIFO queue. This queue holds all the urls 
+        for this domain and becuase in the majority of the cases urls will be appended according to their discovery it also means it respects depth.
+        This preservers the BFS traversal part. 
+
+    Thread Safety:
+        - To prevent chaos of multiple workers popping the same domain and urls; a lock was implemented. Since lock acquisition is very fast a single lock
+        was enough for the entire crawl class. If a domain needs to be popped from either heap or a url needs to be added or removed from the FIFO
+        queue a lock must be acquired first so a single worker can edit the heaps or the queues at all times. This with more time could be improved
+        with multiple locks one for the queue or one for each heap so it is more specialized.
+        - However, having one lock means it is essensial it is freed fast and as such it is only used for heap state transitions while parsing html or https
+        requests a lock should NEVER be held as that would cause threads to wait seconds compared to sub-milliseconds it would take for internal calls.
+    
+    Single Worker Per Domain:
+        - To prevent multiple workers from hammering the same domain the lock is required to edit the heaps. This means that multiple workers
+        are unable to access the same domain at the same time. 
+        - When a domain is in a worker the status is marked as "active", this means that no other worker has access to it. Although in the code it is not 
+        explicitly checked, I do check if the status is "idle" to pop it back in the priority and becuase an "active" status fails this it prevents 
+        a domain mistakently being put in the priority queue for another worker to pick itup.
+
+Novelty Score
+
+    The formula or function is the same as the assignment suggestion just added to itself as needed:
+        Score = (W_Page / lg(p + 2)) + (W_Super / lg(s + 2)). Where W_Page < W_Super
+    The weights for a page is always lower and in this case is page = 1 and page =3 because as the professor mentioned a new superdomain should have a bigger boost.
+    This avoids the wikipedia example trap where it has many language subdomains so if the score was based on subdomains wikipedia would dominate the crawl.
+    For this reason the function uses the log and the superdomain weight so it gives it a bigger boost. In this case if wikipedia was dominating the crawl
+    a new superdomain would have a higher score and be picked up over wikipedia.
+
+Robots.txt & Politeness Optimization
+
+    - To be accurate when parsing a robots.txt file a third-party package was used: urllib.robotparser.RobotFileParser
+    - In order to avoid pages blocked by robots.txt wasting a worker and heap access the approach is a fast forward until a valid url is obtained. This means
+    that rather than putting the domain in the politenss heap when no http request for a url content was made a loop was implemented to loop the domain'safe
+    FIFO url queue until a non blocked url is obtained or the queue is emptied. This ensures that almost always a worker does an http request.
+
+URL Normalization & Content Filtering
+
+    - As the assignment describes a url should be normalized to lower case and while at it fragments were stripped and relative urls with <base> support
+    were resolved with urljoin
+    - Invalid media extensions (probably not all added but I tried) were excluded and same for the content type so only valid text/html is allowed.
+    - In the same fucntion tldextract was used for suffic handling such as .co.uk
+    - URLS taht are found and parsed are returned to be put in the seen_url if not already and put in the crawling queue of the corresponding domain for crawling.
+
+Third Party Libraries
+    - requests: For http requests
+    - lxml: C based html parsing (chosen over beautifulsoup4 for performance)
+    - tldextract: For accurate domain/superdomain extractoin
+    - ddgs: DuckDuckGo search pacakge for support of search queries
+
+Declared Limitations & Bugs
+
+    - Not a bug really but the logs will show more pages were fetched than the limit set and this is due to the multi-threading nature. This is due becuase
+    if the count = limit-1 mutiple workers will see this and make more calls and becuase the count will get updated while workers are fetching pages I 
+    decided to not cut them off and let the finish and report the actual count 
+    - Memory bound to single machine. My testing machine has 16GB of ram which allows me to hold more data in memory and did not run into issues but 
+    computerse with less memory will start having bugs if the cache files like seen_urls fill it up. 
+
