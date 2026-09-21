@@ -163,7 +163,7 @@ class CrawlQueue:
 
         Returns None if there is no url to crawl
         """
-        
+
         with self.lock:
             now = time.monotonic()
             # check if there is a url in the politeness heap and put it back in the priority heap
@@ -218,9 +218,9 @@ class CrawlQueue:
     def finish_url(self, domain: str, delay: float = 1.0, success: bool = True):
         """
         To be called after the url has been downloaded for a domain, this will update the counters and move the domain to politeness
-        
+
         This also decrements the active_workers' count
-        
+
         Args:
             domain:str = Hostname whose url finished crawling
             delay: int = The duration of the cooldown or how long will it be put in the politeness heap
@@ -242,11 +242,11 @@ class CrawlQueue:
     def mark_seen(self, url: str):
         """
         Mark a url as seen so it is not put back again in the queues if found during crawl
-        
+
         Args:
             url:str = Final parsed url
         """
-        
+
         clean_url = normalize_url(url)["url"]
         with self.lock:
             self.seen_urls.add(clean_url)
@@ -321,7 +321,7 @@ def main():
     Prompts for the search query or load default links if empty and spaws the workers to crawl until the limit set is reached.
     """
     robots_cache = RobotsCache()
-    limit: int | None = 5500
+    limit: int | None = 6500
     threads_count: int = 30
 
     query = input("Search: ").strip()

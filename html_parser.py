@@ -10,7 +10,8 @@ import os
 
 BLACKLIST_EXTENSIONS = {
     '.png', '.jpg', '.jpeg', '.gif', '.svg', '.ico', '.webp', '.pdf', '.doc', '.docx', '.ppt', '.pptx', '.xls', '.xlsx', '.csv', '.xml', '.json',
-    '.zip', '.tar', '.gz', '.rar', '.exe', '.bin', '.mp3', '.mp4', '.avi', '.mov', '.mkv', '.css', '.js', '.txt', '.gitignore'
+    '.zip', '.tar', '.gz', '.rar', '.exe', '.bin', '.mp3', '.mp4', '.avi', '.mov', '.mkv', '.css', '.js', '.txt', '.gitignore',
+    '.iso', '.dmg', '.apk', '.img', '.deb', '.rpm', '.pkg', '.msi', '.7z', '.bz2', '.xz', '.wasm'
 }
 
 

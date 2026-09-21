@@ -87,16 +87,22 @@ def fetcher(url: str):
         On Error -> None
     """
     try:
-        req = requests.get(url, timeout=DEFAULT_TIMEOUT,
-                           headers=DEFAULT_HEADERS)
-        if req.status_code == 200:
-            context_type = req.headers.get("Content-Type", "")
-            if "text/html" in context_type:
-                links = parse_html(req.text, req.url)
-                return (req.status_code, len(req.content), req.url, links)
-            return (req.status_code, 0, req.url, None)  # 403 or 500 etc
-        else:
-            return (req.status_code, 0, req.url, None)
+        with requests.get(url, timeout=DEFAULT_TIMEOUT,
+                          headers=DEFAULT_HEADERS, stream=True) as req:
+            if req.status_code == 200:
+                context_type = req.headers.get("Content-Type", "")
+                if "text/html" in context_type:
+                    content_length = req.headers.get("Content-Length")
+                    try:
+                        if content_length and int(content_length) > 10 * 1024 * 1024:
+                            return (req.status_code, 0, req.url, None)
+                    except ValueError:
+                        pass
+                    links = parse_html(req.text, req.url)
+                    return (req.status_code, len(req.content), req.url, links)
+                return (req.status_code, 0, req.url, None)  # 403 or 500 etc
+            else:
+                return (req.status_code, 0, req.url, None)
     except requests.exceptions.Timeout:
         print(f"Server took too long to respond")
         return
