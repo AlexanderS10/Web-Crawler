@@ -62,5 +62,7 @@ Declared Limitations & Bugs
     if the count = limit-1 mutiple workers will see this and make more calls and becuase the count will get updated while workers are fetching pages I 
     decided to not cut them off and let the finish and report the actual count 
     - Memory bound to single machine. My testing machine has 16GB of ram which allows me to hold more data in memory and did not run into issues but 
-    computerse with less memory will start having bugs if the cache files like seen_urls fill it up. 
+    computerse with less memory will start having bugs if the cache files like seen_urls fill it up. This is also tied to me including 
+    as many file extensions in the blacklist as I can think of and encountered if there is a rare one taht I missed it would download
+    it and might fill up memory.
 
