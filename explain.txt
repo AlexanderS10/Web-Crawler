@@ -28,12 +28,11 @@ High-Level Architecture (original is Architecture.md)
 
 Novelty Score
 
-    The formula or function is the same as the assignment suggestion just added to itself as needed:
-        Score = (W_Page / lg(p + 2)) + (W_Super / lg(s + 2)). Where W_Page < W_Super
-    The weights for a page is always lower and in this case is page = 1 and page =3 because as the professor mentioned a new superdomain should have a bigger boost.
+    The formula or function is the same as the assignment suggestion with a depth penalty added to respect BFS:
+        Score = (W_Page / lg(p + 2)) + (W_Super / lg(s + 2)) - (W_Depth * depth). Where W_Page = 1.0, W_Super = 3.0, W_Depth = 3.4
+    The weights for a page is always lower and in this case is page = 1 and super = 3 because as the professor mentioned a new superdomain should have a bigger boost.
     This avoids the wikipedia example trap where it has many language subdomains so if the score was based on subdomains wikipedia would dominate the crawl.
-    For this reason the function uses the log and the superdomain weight so it gives it a bigger boost. In this case if wikipedia was dominating the crawl
-    a new superdomain would have a higher score and be picked up over wikipedia.
+    The depth penalty (W_Depth * depth) was added to ensure the BFS policy is preserved so the crawler finishes shallower pages before diving deep into a domain.
 
 Robots.txt & Politeness Optimization
 
@@ -48,7 +47,9 @@ URL Normalization & Content Filtering
     were resolved with urljoin
     - Invalid media extensions (probably not all added but I tried) were excluded and same for the content type so only valid text/html is allowed.
     - In the same fucntion tldextract was used for suffic handling such as .co.uk
-    - URLS taht are found and parsed are returned to be put in the seen_url if not already and put in the crawling queue of the corresponding domain for crawling.
+    - Deduplication (Seen Store): Instead of a dictionary or set storing full URL strings which consumes a lot of memory, an in-memory Scalable Bloom Filter
+    was implemented with double hashing. It takes only ~230 KB for 200,000 URLs with a 1% error rate and runs entirely in RAM with no disk I/O, and is reset cleanly on each run.
+    - URLS that are new are put in the seen store and added to the crawling queue of the corresponding domain for crawling.
 
 Third Party Libraries
     - requests: For http requests
@@ -61,8 +62,8 @@ Declared Limitations & Bugs
     - Not a bug really but the logs will show more pages were fetched than the limit set and this is due to the multi-threading nature. This is due becuase
     if the count = limit-1 mutiple workers will see this and make more calls and becuase the count will get updated while workers are fetching pages I 
     decided to not cut them off and let the finish and report the actual count 
-    - Memory bound to single machine. My testing machine has 16GB of ram which allows me to hold more data in memory and did not run into issues but 
-    computerse with less memory will start having bugs if the cache files like seen_urls fill it up. This is also tied to me including 
-    as many file extensions in the blacklist as I can think of and encountered if there is a rare one taht I missed it would download
-    it and might fill up memory.
+    - Memory bound to single machine. My testing machine has 16GB of ram which allows me to hold more data in memory. Using stream=True with content-length
+    checks stops large files from filling RAM, and the Bloom filter keeps URL tracking footprint under 1MB, but if a rare unblacklisted huge file is encountered
+    it could take memory before being dropped.
+    - My timeouts can be aggressive on slower internet connections so these should be edited accordingly which is why I moved them to the top of the file for easier use. With more time these coudl be dynamic. 
 

@@ -5,6 +5,7 @@ Main file with the worker and thread safe class to handle the queue
 from fetcher import fetcher, RobotsCache
 import heapq
 import math
+import os
 from url_utils import normalize_url, extract_domain_info
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
@@ -12,6 +13,7 @@ import time
 import threading
 from search_util import get_search_seeds
 from logger import CrawlLogger
+from seen_store import SeenStore
 
 
 @dataclass
@@ -24,6 +26,7 @@ class DomainInfo:
         pages: int = The number of pages that are successfully crawled
         superdomain:str = The name of the superdomain
         status: str = The state of the domain (Idle, In the politeness heap or priority heap and active)
+        attempts: int = Number of URL fetch attempts made for this domain
     """
 
     queue: deque = field(default_factory=deque)
@@ -33,6 +36,15 @@ class DomainInfo:
     attempts: int = 0
 
     def add_item(self, value: tuple[str, int], pages, superdomain, status):
+        """
+        Adds an item to the domain's URL queue and updates metadata
+
+        Args:
+            value:tuple[str, int] = Tuple containing the URL and crawl depth
+            pages:int = Number of pages crawled for this domain
+            superdomain:str = Name of the superdomain
+            status:str = State of the domain
+        """
         self.queue.append(value)  # the queue has the url and the depth
         self.pages = pages
         self.superdomain = superdomain
@@ -46,6 +58,15 @@ class CrawlQueue:
     Coordinates two heaps:
       1. priority_heap: Max-heap (using negative keys) ranking domains by novelty.
       2. politeness_heap: Min-heap enforcing per-domain time cooldowns.
+
+    Fields:
+        lock: threading.Lock = Mutex lock protecting heaps and tracking tables
+        priority_heap: list = Max-heap ranking domains by novelty score
+        politeness_heap: list = Min-heap enforcing per-domain time cooldowns
+        domain_table: defaultdict = Mapping of domain name to DomainInfo state
+        superdomain_counts: defaultdict = Total crawl counts per superdomain
+        seen_urls: SeenStore = Two-tier deduplication store for visited and enqueued urls
+        active_workers: int = Number of worker threads currently processing URLs
     """
     W_Page: float = 1.0  # Wight for the pages within the same subdomain
     W_Super: float = 3.0  # Weight for the super domain (extra boost)
@@ -64,7 +85,7 @@ class CrawlQueue:
         self.politeness_heap: list = []
         self.domain_table = defaultdict(DomainInfo)
         self.superdomain_counts = defaultdict(int)
-        self.seen_urls: set[str] = set()
+        self.seen_urls = SeenStore(db_path=None)
         self.active_workers: int = 0
 
         if seed_urls:
@@ -93,6 +114,12 @@ class CrawlQueue:
         return page_term + super_term - depth_penalty
 
     def add_to_priority(self, domain: str):
+        """
+        Adds an untracked domain to the priority heap with initial novelty score
+
+        Args:
+            domain:str = Domain hostname to add
+        """
         domain_obj = self.domain_table[domain]
         if not domain_obj:  # if the domain is not being tracked then add it with the max score
             next_depth = domain_obj.queue[0][1] if domain_obj.queue else 0
@@ -113,7 +140,7 @@ class CrawlQueue:
             depth:int = Depth from seed url
 
         Returns:
-            True if the URL was accepted; False if already seen or invalid.
+            accepted:bool = True if the URL was accepted; False if already seen or invalid.
         """
 
         if not url or not isinstance(url, str):
@@ -125,9 +152,8 @@ class CrawlQueue:
         full_domain, superdomain = domain_info
         # Threading lock
         with self.lock:
-            if clean_url in self.seen_urls:
+            if not self.seen_urls.check_and_add(clean_url):
                 return False
-            self.seen_urls.add(clean_url)
             if full_domain in self.domain_table:
                 domain_obj = self.domain_table[full_domain]
                 domain_obj.queue.append((clean_url, depth))
@@ -186,16 +212,17 @@ class CrawlQueue:
                 else:
                     domain_obj.status = "idle"
             # if the domain is ready in priority then can be popped
-            if self.priority_heap:
+            while self.priority_heap:
                 neg_score, domain = heapq.heappop(self.priority_heap)
                 domain_obj_priority = self.domain_table[domain]
                 if not domain_obj_priority.queue:
                     domain_obj_priority.status = "idle"
-                    return None, 0, None, 0.0, 0.0, 0.01
+                    continue
                 url, depth = domain_obj_priority.queue.popleft()
                 domain_obj_priority.status = "active"
                 self.active_workers += 1
-                p = domain_obj_priority.pages
+                p = max(domain_obj_priority.pages,
+                        domain_obj_priority.attempts)
                 s = self.superdomain_counts[domain_obj_priority.superdomain]
                 page_score = self.W_Page / math.log2(p + 2)
                 domain_score = self.W_Super / math.log2(s + 2)
@@ -221,7 +248,7 @@ class CrawlQueue:
             domain:str = The hostname of the currently active domain in the worker
 
         Returns:
-            tuple(url, depth), or None if the domain's queue is empty.
+            item:tuple[str, int] | None = Next (url, depth) tuple, or None if the domain's queue is empty.
         """
         with self.lock:
             domain_obj = self.domain_table[domain]
@@ -237,7 +264,7 @@ class CrawlQueue:
 
         Args:
             domain:str = Hostname whose url finished crawling
-            delay: int = The duration of the cooldown or how long will it be put in the politeness heap
+            delay:float = The duration of the cooldown or how long will it be put in the politeness heap
             success:bool = If the http request was successful or not
         """
         with self.lock:
@@ -246,7 +273,7 @@ class CrawlQueue:
             domain_obj.attempts += 1
             if success:
                 domain_obj.pages += 1
-            self.superdomain_counts[domain_obj.superdomain] += 1
+                self.superdomain_counts[domain_obj.superdomain] += 1
             if len(domain_obj.queue) > 0:
                 ready_time = time.monotonic() + delay
                 heapq.heappush(self.politeness_heap, (ready_time, domain))
@@ -265,6 +292,19 @@ class CrawlQueue:
         clean_url = normalize_url(url)["url"]
         with self.lock:
             self.seen_urls.add(clean_url)
+
+    def close(self) -> None:
+        """
+        Closes the seen_urls store and ensures no on-disk database file is left behind.
+        """
+        with self.lock:
+            self.seen_urls.close()
+            for fname in ("seen_urls.db", "seen_urls.db-wal", "seen_urls.db-shm"):
+                if os.path.exists(fname):
+                    try:
+                        os.remove(fname)
+                    except Exception:
+                        pass
 
 
 def worker(worker_id: int, crawl_queue: CrawlQueue, robots_cache: RobotsCache, limit: int | None, shared_counter: list[int], counter_lock: threading.Lock, stop_event: threading.Event, crawl_logger: CrawlLogger):
@@ -293,42 +333,50 @@ def worker(worker_id: int, crawl_queue: CrawlQueue, robots_cache: RobotsCache, l
             time.sleep(min(wait_time, 0.5))
             continue
 
-        while not robots_cache.can_crawl(domain, url):
-            next_item = crawl_queue.get_next_url_for_domain(domain)
-            if next_item is None:
-                url = None
-                break
-            url, depth = next_item
-        if url is None:  # if for soem reason all the urls in the queue were in robots
-            crawl_queue.finish_url(domain, delay=0.0, success=False)
-            continue
-        result = fetcher(url)
-        access_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
-        if not result:
-            crawl_queue.finish_url(domain, 0.5, success=False)
-            crawl_logger.log(url, 0, access_time, 0,
-                             page_score, domain_score, depth)
-            continue
-        status, content_size, full_url, links = result
-        crawl_queue.mark_seen(full_url)
+        domain_finished = False
+        try:
+            while not robots_cache.can_crawl(domain, url):
+                next_item = crawl_queue.get_next_url_for_domain(domain)
+                if next_item is None:
+                    url = None
+                    break
+                url, depth = next_item
+            if url is None:  # if for soem reason all the urls in the queue were in robots
+                crawl_queue.finish_url(domain, delay=0.0, success=False)
+                domain_finished = True
+                continue
+            result = fetcher(url)
+            access_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+            if not result:
+                crawl_queue.finish_url(domain, 0.5, success=False)
+                domain_finished = True
+                crawl_logger.log(url, 0, access_time, 0,
+                                 page_score, domain_score, depth)
+                continue
+            status, content_size, full_url, links = result
+            crawl_queue.mark_seen(full_url)
 
-        if links and status == 200:
-            child_depth = depth + 1
-            for link in links:
-                crawl_queue.add_url(link, child_depth)
+            if links and status == 200:
+                child_depth = depth + 1
+                for link in links:
+                    crawl_queue.add_url(link, child_depth)
 
-        is_success = (status == 200)
-        crawl_queue.finish_url(domain, 0.5, success=is_success)
+            is_success = (status == 200)
+            crawl_queue.finish_url(domain, 0.5, success=is_success)
+            domain_finished = True
 
-        crawl_logger.log(url, content_size, access_time,
-                         status, page_score, domain_score, depth)
-        if status != 200:
-            continue
-        with counter_lock:
-            shared_counter[0] += 1
-            if limit is not None and shared_counter[0] >= limit:
-                stop_event.set()
-                break
+            crawl_logger.log(url, content_size, access_time,
+                             status, page_score, domain_score, depth)
+            if status != 200:
+                continue
+            with counter_lock:
+                shared_counter[0] += 1
+                if limit is not None and shared_counter[0] >= limit:
+                    stop_event.set()
+                    break
+        except Exception:
+            if not domain_finished and domain:
+                crawl_queue.finish_url(domain, 0.5, success=False)
 
 
 def main():
@@ -338,7 +386,7 @@ def main():
     Prompts for the search query or load default links if empty and spaws the workers to crawl until the limit set is reached.
     """
     robots_cache = RobotsCache()
-    limit: int | None = 6500
+    limit: int | None = None
     threads_count: int = 30
 
     query = input("Search: ").strip()
@@ -376,7 +424,7 @@ def main():
         f"Starting the crawl with {threads_count} threads, and with a limit of {limit} pages")
     start_time = time.time()
     threads = []
-    logger = CrawlLogger("crawl_log.csv")
+    logger = CrawlLogger("crawl_log_google_services.csv")
     for i in range(threads_count):
         t = threading.Thread(target=worker, args=(
             i+1,
@@ -395,24 +443,25 @@ def main():
         for t in threads:
             t.join()
     except KeyboardInterrupt:
-        print("Force stop: ending threads")
+        print("\nFORCE STOP: ending threads give it a second the metrics will be printed when done")
         stop_event.set()
         for t in threads:
             t.join()
+    finally:
+        total_time = time.time() - start_time
+        pages_crawled = shared_counter[0]
+        rate = pages_crawled / total_time if total_time > 0 else 0
+        print("CRAWL COMPLETE")
+        print(f"Threads used: {threads_count}")
+        print(f"Time: {total_time:.2f} seconds")
+        print(f"Pages crawled: {pages_crawled}")
+        print(f"404 Errors: {logger.status_counts.get(404, 0)}")
+        print(f"Total data: {logger.total_bytes / (1024 * 1024):.2f} MB")
+        print(f"Rate: {rate:.2f} pages per second")
 
-    total_time = time.time() - start_time
-    pages_crawled = shared_counter[0]
-    rate = pages_crawled / total_time if total_time > 0 else 0
-    print("CRAWL COMPLETE")
-    print(f"Threads used: {threads_count}")
-    print(f"Time: {total_time:.2f} seconds")
-    print(f"Pages crawled: {pages_crawled}")
-    print(f"404 Errors: {logger.status_counts.get(404, 0)}")
-    print(f"Total data: {logger.total_bytes / (1024 * 1024):.2f} MB")
-    print(f"Rate: {rate:.2f} pages per second")
-
-    logger.write_summary(total_time)
-    logger.close()
+        logger.write_summary(total_time)
+        logger.close()
+        crawl_queue.close()
 
 
 if __name__ == "__main__":

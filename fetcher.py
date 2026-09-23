@@ -6,10 +6,11 @@ from html_parser import parse_html
 import requests
 from urllib.robotparser import RobotFileParser
 from urllib.parse import urlsplit
+import threading
 
 
 DEFAULT_HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
+    "User-Agent": "NYUTandonWebCrawler/1.0 (CS6913 Web Search Engines Assignment)"
 }
 DEFAULT_TIMEOUT = (0.8, 2.5)
 
@@ -28,6 +29,7 @@ class RobotsCache:
         """
 
         self.cache: dict = {}
+        self.lock = threading.Lock()
         self.timeout = default_timeout
         self.user_agent: str = "*"
 
@@ -44,11 +46,17 @@ class RobotsCache:
         Returns:
             True if crawling is allowed or robots.txt is unavailable/empty; False otherwise.
         """
-        if domain not in self.cache:
-            self._fetch_robots_file(domain, url)
-        return self.cache[domain].can_fetch(self.user_agent, url)
+        with self.lock:
+            parser = self.cache.get(domain)
 
-    def _fetch_robots_file(self, domain: str, url: str) -> None:
+        if parser is None:
+            parser = self._fetch_robots_file(domain, url)
+            with self.lock:
+                self.cache[domain] = parser
+
+        return parser.can_fetch(self.user_agent, url)
+
+    def _fetch_robots_file(self, domain: str, url: str) -> RobotFileParser:
         """
         Downloads and parses the robots.txt file.
 
@@ -69,11 +77,9 @@ class RobotsCache:
                 robot_parser.parse(robots_req.text.splitlines())
             else:
                 robot_parser.parse([])
-            self.cache[domain] = robot_parser
-        except requests.RequestException as e:
-            print("The robots.txt file failed to fetch")
+        except requests.RequestException:
             robot_parser.parse([])
-            self.cache[domain] = robot_parser
+        return robot_parser
 
 
 def fetcher(url: str):
