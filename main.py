@@ -30,6 +30,7 @@ class DomainInfo:
     pages: int = 0
     superdomain: str = ""
     status: str = "idle"
+    attempts: int = 0
 
     def add_item(self, value: tuple[str, int], pages, superdomain, status):
         self.queue.append(value)  # the queue has the url and the depth
@@ -48,6 +49,7 @@ class CrawlQueue:
     """
     W_Page: float = 1.0  # Wight for the pages within the same subdomain
     W_Super: float = 3.0  # Weight for the super domain (extra boost)
+    W_Depth: float = 3.4
 
     def __init__(self, seed_urls):
         """
@@ -70,30 +72,32 @@ class CrawlQueue:
                 clean_url = normalize_url(url)["url"]
                 self.add_url(clean_url, 0)
 
-    def novelty_score(self, p: int, s: int) -> float:
+    def novelty_score(self, p: int, s: int, depth: int = 0) -> float:
         """
-        Calculates priority score balancing page and superdomain novelty
+        Calculates priority score balancing page, superdomain novelty, and crawl depth
 
-        Uses logarithmic damping: (W_Page / lg(p + 2)) + (W_Super / lg(s + 2))
-        Higher W_Super prevents subdomain traps like the wikipedia example
+        Uses logarithmic damping with a depth penalty: (W_Page / lg(p + 2)) + (W_Super / lg(s + 2)) - (W_Depth * depth)
 
         Args:
             p:int = Count of pages already crawled from this subdomain
             s:int = Total count of pages crawled across the superdomain
+            depth:int = Distance from seed pages in the web graph
 
         Returns:
             novelty_score:float = Novelty score (higher indicates higher crawl priority).
         """
         # the benefit of new domains is higher
-        page_term = 1/(math.log2(p+2))
-        super_term = 1/(math.log2(s+2))
-        return (self.W_Page * page_term) + (self.W_Super*super_term)
+        page_term = self.W_Page / (math.log2(p + 2))
+        super_term = self.W_Super / (math.log2(s + 2))
+        depth_penalty = self.W_Depth * depth
+        return page_term + super_term - depth_penalty
 
     def add_to_priority(self, domain: str):
         domain_obj = self.domain_table[domain]
         if not domain_obj:  # if the domain is not being tracked then add it with the max score
+            next_depth = domain_obj.queue[0][1] if domain_obj.queue else 0
             heapq.heappush(self.priority_heap,
-                           (self.novelty_score(0, 0), domain))
+                           (-self.novelty_score(0, 0, next_depth), domain))
         # if the domain exists then we have to get the counts
         return
 
@@ -131,18 +135,20 @@ class CrawlQueue:
                 # sleeping domain
                 if domain_obj.status == "idle":
                     domain_obj.status = "in_priority"
-                    score = self.novelty_score(
-                        domain_obj.pages, self.superdomain_counts[domain_obj.superdomain])
+                    next_depth = domain_obj.queue[0][1]
+                    p = max(domain_obj.pages, domain_obj.attempts)
+                    s = self.superdomain_counts[domain_obj.superdomain]
+                    score = self.novelty_score(p, s, next_depth)
                     heapq.heappush(self.priority_heap, (-score, full_domain))
             else:  # New domain
                 if superdomain not in self.superdomain_counts:
                     self.superdomain_counts[superdomain] = 0
                 new_domain = DomainInfo(
-                    pages=0, superdomain=superdomain, status="in_priority")
+                    pages=0, superdomain=superdomain, status="in_priority", attempts=0)
                 new_domain.queue.append((clean_url, depth))
                 self.domain_table[full_domain] = new_domain
                 score = self.novelty_score(
-                    0, self.superdomain_counts[superdomain])
+                    0, self.superdomain_counts[superdomain], depth)
                 heapq.heappush(self.priority_heap, (-score, full_domain))
             return True
 
@@ -170,14 +176,22 @@ class CrawlQueue:
             while self.politeness_heap and self.politeness_heap[0][0] <= now:
                 ready_time, domain = heapq.heappop(self.politeness_heap)
                 domain_obj = self.domain_table[domain]
-                score = self.novelty_score(
-                    domain_obj.pages, self.superdomain_counts[domain_obj.superdomain])
-                heapq.heappush(self.priority_heap, (-score, domain))
-                domain_obj.status = "in_priority"
+                if domain_obj.queue:
+                    next_depth = domain_obj.queue[0][1]
+                    p = max(domain_obj.pages, domain_obj.attempts)
+                    s = self.superdomain_counts[domain_obj.superdomain]
+                    score = self.novelty_score(p, s, next_depth)
+                    heapq.heappush(self.priority_heap, (-score, domain))
+                    domain_obj.status = "in_priority"
+                else:
+                    domain_obj.status = "idle"
             # if the domain is ready in priority then can be popped
             if self.priority_heap:
                 neg_score, domain = heapq.heappop(self.priority_heap)
                 domain_obj_priority = self.domain_table[domain]
+                if not domain_obj_priority.queue:
+                    domain_obj_priority.status = "idle"
+                    return None, 0, None, 0.0, 0.0, 0.01
                 url, depth = domain_obj_priority.queue.popleft()
                 domain_obj_priority.status = "active"
                 self.active_workers += 1
@@ -229,9 +243,10 @@ class CrawlQueue:
         with self.lock:
             self.active_workers -= 1
             domain_obj = self.domain_table[domain]
+            domain_obj.attempts += 1
             if success:
                 domain_obj.pages += 1
-                self.superdomain_counts[domain_obj.superdomain] += 1
+            self.superdomain_counts[domain_obj.superdomain] += 1
             if len(domain_obj.queue) > 0:
                 ready_time = time.monotonic() + delay
                 heapq.heappush(self.politeness_heap, (ready_time, domain))
@@ -288,15 +303,22 @@ def worker(worker_id: int, crawl_queue: CrawlQueue, robots_cache: RobotsCache, l
             crawl_queue.finish_url(domain, delay=0.0, success=False)
             continue
         result = fetcher(url)
-        is_success = (result is not None and result[0] == 200)
-        crawl_queue.finish_url(domain, 0.5, success=is_success)
         access_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
         if not result:
+            crawl_queue.finish_url(domain, 0.5, success=False)
             crawl_logger.log(url, 0, access_time, 0,
                              page_score, domain_score, depth)
             continue
         status, content_size, full_url, links = result
         crawl_queue.mark_seen(full_url)
+
+        if links and status == 200:
+            child_depth = depth + 1
+            for link in links:
+                crawl_queue.add_url(link, child_depth)
+
+        is_success = (status == 200)
+        crawl_queue.finish_url(domain, 0.5, success=is_success)
 
         crawl_logger.log(url, content_size, access_time,
                          status, page_score, domain_score, depth)
@@ -307,11 +329,6 @@ def worker(worker_id: int, crawl_queue: CrawlQueue, robots_cache: RobotsCache, l
             if limit is not None and shared_counter[0] >= limit:
                 stop_event.set()
                 break
-
-        if links:
-            child_depth = depth+1
-            for link in links:
-                crawl_queue.add_url(link, child_depth)
 
 
 def main():
